@@ -1,5 +1,11 @@
 const statusEl = document.getElementById("status");
+const targetButtonsEl = document.getElementById("target-buttons");
 const DEFAULT_CLEAR_CLIPBOARD_AFTER_USE = true;
+const DEFAULT_TARGETS = [
+  { id: "atlas", name: "ChatGPT Atlas" },
+  { id: "dia", name: "ChatGPT Dia" },
+  { id: "gemini", name: "Gemini (Chrome)" }
+];
 
 function setStatus(text, isError = false) {
   statusEl.textContent = text;
@@ -39,6 +45,21 @@ function extractFirstUrl(text) {
   }
 }
 
+function normalizeTargets(settings) {
+  if (Array.isArray(settings?.targets) && settings.targets.length > 0) {
+    return settings.targets
+      .map((target, index) => ({
+        id: typeof target?.id === "string" && target.id.trim()
+          ? target.id.trim()
+          : `target-${index + 1}`,
+        name: typeof target?.name === "string" && target.name.trim()
+          ? target.name.trim()
+          : `Target ${index + 1}`
+      }));
+  }
+  return DEFAULT_TARGETS;
+}
+
 async function getClearClipboardAfterUse() {
   try {
     const { settings } = await chrome.storage.sync.get("settings");
@@ -51,7 +72,7 @@ async function getClearClipboardAfterUse() {
   return DEFAULT_CLEAR_CLIPBOARD_AFTER_USE;
 }
 
-async function openCurrentPage(target) {
+async function openCurrentPage(targetId) {
   setStatus("Sending request...");
   const clipboardText = await readClipboardTextSafe();
   const clipboardUrl = extractFirstUrl(clipboardText);
@@ -63,7 +84,7 @@ async function openCurrentPage(target) {
 
   const response = await chrome.runtime.sendMessage({
     type: "OPEN_CURRENT_PAGE",
-    target,
+    target: targetId,
     clipboardText,
     clipboardClearedByClient: clearedBeforeSend
   });
@@ -90,16 +111,43 @@ async function openCurrentPage(target) {
   setStatus("Done.");
 }
 
-document.querySelectorAll("button[data-target]").forEach((button) => {
-  button.addEventListener("click", async () => {
-    try {
-      await openCurrentPage(button.dataset.target);
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  });
+function renderTargetButtons(settings) {
+  const targets = normalizeTargets(settings);
+  targetButtonsEl.innerHTML = "";
+  for (const target of targets) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.target = target.id;
+    button.textContent = target.name;
+    targetButtonsEl.appendChild(button);
+  }
+}
+
+async function loadTargets() {
+  const response = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
+  if (!response?.ok) {
+    throw new Error(response?.error || "Failed to load targets.");
+  }
+  renderTargetButtons(response.settings);
+}
+
+targetButtonsEl.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-target]");
+  if (!button) {
+    return;
+  }
+
+  try {
+    await openCurrentPage(button.dataset.target);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
 });
 
 document.getElementById("open-settings").addEventListener("click", () => {
   chrome.runtime.openOptionsPage();
+});
+
+loadTargets().catch((error) => {
+  setStatus(error.message, true);
 });

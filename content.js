@@ -1,14 +1,13 @@
 (function () {
   const TOAST_ID = "__open_in_browser_toast";
-  const TARGET_KEYS = ["atlas", "dia", "gemini"];
-  const DEFAULT_SHORTCUTS = {
-    atlas: "ctrl+shift+o",
-    dia: "alt+shift+o",
-    gemini: "meta+shift+o"
-  };
   const DEFAULT_CLEAR_CLIPBOARD_AFTER_USE = true;
+  const DEFAULT_TARGETS = [
+    { id: "atlas", name: "ChatGPT Atlas", shortcut: "ctrl+shift+o" },
+    { id: "dia", name: "ChatGPT Dia", shortcut: "alt+shift+o" },
+    { id: "gemini", name: "Gemini (Chrome)", shortcut: "meta+shift+o" }
+  ];
 
-  let activeShortcuts = {};
+  let activeTargetBindings = [];
   let activeClearClipboardAfterUse = DEFAULT_CLEAR_CLIPBOARD_AFTER_USE;
   let hoveredLinkUrl = "";
   let toastTimer = null;
@@ -115,41 +114,6 @@
     return shortcut.code ? shortcut : null;
   }
 
-  function matchShortcut(event, shortcut) {
-    if (!shortcut) {
-      return false;
-    }
-    return (
-      event.ctrlKey === shortcut.ctrl &&
-      event.altKey === shortcut.alt &&
-      event.metaKey === shortcut.meta &&
-      event.shiftKey === shortcut.shift &&
-      event.code === shortcut.code
-    );
-  }
-
-  function matchModifiers(event, shortcut) {
-    if (!shortcut) {
-      return false;
-    }
-    return (
-      event.ctrlKey === shortcut.ctrl &&
-      event.altKey === shortcut.alt &&
-      event.metaKey === shortcut.meta &&
-      event.shiftKey === shortcut.shift
-    );
-  }
-
-  function buildShortcuts(settings) {
-    const shortcuts = settings?.shortcuts || {};
-    const result = {};
-    for (const target of TARGET_KEYS) {
-      const raw = shortcuts[target] || DEFAULT_SHORTCUTS[target];
-      result[target] = parseShortcut(raw);
-    }
-    return result;
-  }
-
   function extractFirstUrl(text) {
     if (typeof text !== "string" || !text.trim()) {
       return null;
@@ -165,21 +129,46 @@
     }
   }
 
-  function getSelectedTextSafe() {
-    try {
-      const selection = window.getSelection();
-      if (!selection) {
-        return "";
-      }
-      return selection.toString();
-    } catch (_error) {
-      return "";
+  function normalizeTargetId(value, fallback) {
+    if (typeof value !== "string" || !value.trim()) {
+      return fallback;
     }
+    return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+  }
+
+  function buildTargetBindings(settings) {
+    const rawTargets = Array.isArray(settings?.targets) && settings.targets.length > 0
+      ? settings.targets
+      : DEFAULT_TARGETS;
+    const bindings = [];
+
+    for (let index = 0; index < rawTargets.length; index += 1) {
+      const rawTarget = rawTargets[index];
+      const fallback = DEFAULT_TARGETS[index % DEFAULT_TARGETS.length];
+      const id = normalizeTargetId(rawTarget?.id, fallback.id);
+      const name = (
+        typeof rawTarget?.name === "string" && rawTarget.name.trim()
+          ? rawTarget.name.trim()
+          : fallback.name
+      );
+      const shortcutText = (
+        typeof rawTarget?.shortcut === "string" && rawTarget.shortcut.trim()
+          ? rawTarget.shortcut.trim().toLowerCase()
+          : fallback.shortcut
+      );
+      const shortcut = parseShortcut(shortcutText);
+      if (!shortcut) {
+        continue;
+      }
+      bindings.push({ id, name, shortcut });
+    }
+
+    return bindings;
   }
 
   function buildRuntimeSettings(settings) {
     return {
-      shortcuts: buildShortcuts(settings),
+      targetBindings: buildTargetBindings(settings),
       clearClipboardAfterUse: typeof settings?.clearClipboardAfterUse === "boolean"
         ? settings.clearClipboardAfterUse
         : DEFAULT_CLEAR_CLIPBOARD_AFTER_USE
@@ -190,41 +179,64 @@
     try {
       const { settings } = await chrome.storage.sync.get("settings");
       const runtimeSettings = buildRuntimeSettings(settings || {});
-      activeShortcuts = runtimeSettings.shortcuts;
+      activeTargetBindings = runtimeSettings.targetBindings;
       activeClearClipboardAfterUse = runtimeSettings.clearClipboardAfterUse;
     } catch (_error) {
       const runtimeSettings = buildRuntimeSettings({});
-      activeShortcuts = runtimeSettings.shortcuts;
+      activeTargetBindings = runtimeSettings.targetBindings;
       activeClearClipboardAfterUse = runtimeSettings.clearClipboardAfterUse;
     }
   }
 
-  function findTargetByEvent(event) {
-    for (const target of TARGET_KEYS) {
-      if (matchShortcut(event, activeShortcuts[target])) {
-        return target;
+  function matchShortcut(event, shortcut) {
+    return (
+      event.ctrlKey === shortcut.ctrl &&
+      event.altKey === shortcut.alt &&
+      event.metaKey === shortcut.meta &&
+      event.shiftKey === shortcut.shift &&
+      event.code === shortcut.code
+    );
+  }
+
+  function matchModifiers(event, shortcut) {
+    return (
+      event.ctrlKey === shortcut.ctrl &&
+      event.altKey === shortcut.alt &&
+      event.metaKey === shortcut.meta &&
+      event.shiftKey === shortcut.shift
+    );
+  }
+
+  function findTargetByKeyEvent(event) {
+    for (const binding of activeTargetBindings) {
+      if (matchShortcut(event, binding.shortcut)) {
+        return binding;
       }
     }
     return null;
   }
 
   function findTargetByModifierClick(event) {
-    for (const target of TARGET_KEYS) {
-      const shortcut = activeShortcuts[target];
-      if (!shortcut) {
-        continue;
-      }
-
+    for (const binding of activeTargetBindings) {
+      const shortcut = binding.shortcut;
       const hasAnyModifier = shortcut.ctrl || shortcut.alt || shortcut.meta || shortcut.shift;
       if (!hasAnyModifier) {
         continue;
       }
-
       if (matchModifiers(event, shortcut)) {
-        return target;
+        return binding;
       }
     }
     return null;
+  }
+
+  function getSelectedTextSafe() {
+    try {
+      const selection = window.getSelection();
+      return selection ? selection.toString() : "";
+    } catch (_error) {
+      return "";
+    }
   }
 
   async function readClipboardTextSafe() {
@@ -245,12 +257,36 @@
     }
   }
 
+  function handleResponse(response, clearedBeforeSend) {
+    if (!response?.ok) {
+      showToast(response?.error || "Request failed", true);
+      return;
+    }
+
+    if (response?.shouldClearClipboard) {
+      if (clearedBeforeSend) {
+        showToast("Opened, clipboard cleared");
+        return;
+      }
+      clearClipboardSafe().then((cleared) => {
+        if (cleared) {
+          showToast("Opened, clipboard cleared");
+          return;
+        }
+        showToast("Opened (clipboard not cleared)");
+      });
+      return;
+    }
+
+    showToast("Opened");
+  }
+
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "sync" || !changes.settings) {
       return;
     }
     const runtimeSettings = buildRuntimeSettings(changes.settings.newValue || {});
-    activeShortcuts = runtimeSettings.shortcuts;
+    activeTargetBindings = runtimeSettings.targetBindings;
     activeClearClipboardAfterUse = runtimeSettings.clearClipboardAfterUse;
   });
 
@@ -261,7 +297,7 @@
         return;
       }
 
-      const target = findTargetByEvent(event);
+      const target = findTargetByKeyEvent(event);
       if (!target) {
         return;
       }
@@ -285,11 +321,11 @@
         clearedBeforeSend = await clearClipboardSafe();
       }
 
-      showToast(`Sending to ${target}...`);
+      showToast(`Sending to ${target.name}...`);
       chrome.runtime.sendMessage(
         {
           type: "OPEN_CURRENT_PAGE",
-          target,
+          target: target.id,
           hoveredLinkUrl,
           selectedText,
           url: window.location.href,
@@ -301,25 +337,7 @@
             showToast("Extension error", true);
             return;
           }
-          if (!response?.ok) {
-            showToast(response?.error || "Request failed", true);
-            return;
-          }
-          if (response?.shouldClearClipboard) {
-            if (clearedBeforeSend) {
-              showToast("Opened, clipboard cleared");
-              return;
-            }
-            clearClipboardSafe().then((cleared) => {
-              if (cleared) {
-                showToast("Opened, clipboard cleared");
-                return;
-              }
-              showToast("Opened (clipboard not cleared)");
-            });
-            return;
-          }
-          showToast("Opened");
+          handleResponse(response, clearedBeforeSend);
         }
       );
     },
@@ -367,11 +385,11 @@
         clearedBeforeSend = await clearClipboardSafe();
       }
 
-      showToast(`Opening link in ${target}...`);
+      showToast(`Opening link in ${target.name}...`);
       chrome.runtime.sendMessage(
         {
           type: "OPEN_CURRENT_PAGE",
-          target,
+          target: target.id,
           clickedLinkUrl: anchor.href,
           hoveredLinkUrl,
           selectedText,
@@ -384,25 +402,7 @@
             showToast("Extension error", true);
             return;
           }
-          if (!response?.ok) {
-            showToast(response?.error || "Request failed", true);
-            return;
-          }
-          if (response?.shouldClearClipboard) {
-            if (clearedBeforeSend) {
-              showToast("Opened, clipboard cleared");
-              return;
-            }
-            clearClipboardSafe().then((cleared) => {
-              if (cleared) {
-                showToast("Opened, clipboard cleared");
-                return;
-              }
-              showToast("Opened (clipboard not cleared)");
-            });
-            return;
-          }
-          showToast("Opened");
+          handleResponse(response, clearedBeforeSend);
         }
       );
     },

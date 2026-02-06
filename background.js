@@ -1,22 +1,30 @@
+const MENU_ID_PREFIX = "open-with-";
+
+const DEFAULT_TARGETS = [
+  {
+    id: "atlas",
+    name: "ChatGPT Atlas",
+    endpoint: "/talkWithChatgptAltas",
+    shortcut: "ctrl+shift+o"
+  },
+  {
+    id: "dia",
+    name: "ChatGPT Dia",
+    endpoint: "/talkWithChatgptDia",
+    shortcut: "alt+shift+o"
+  },
+  {
+    id: "gemini",
+    name: "Gemini (Chrome)",
+    endpoint: "/talkWithGemini",
+    shortcut: "meta+shift+o"
+  }
+];
+
 const DEFAULT_SETTINGS = {
   apiBase: "http://localhost:5000",
-  endpoints: {
-    atlas: "/talkWithChatgptAltas",
-    dia: "/talkWithChatgptDia",
-    gemini: "/talkWithGemini"
-  },
-  shortcuts: {
-    atlas: "ctrl+shift+o",
-    dia: "alt+shift+o",
-    gemini: "meta+shift+o"
-  },
+  targets: DEFAULT_TARGETS,
   clearClipboardAfterUse: true
-};
-
-const TARGETS = {
-  atlas: { menuTitle: "Open link/current page in ChatGPT Atlas" },
-  dia: { menuTitle: "Open link/current page in ChatGPT Dia" },
-  gemini: { menuTitle: "Open link/current page in Gemini (Chrome)" }
 };
 
 let badgeClearTimer = null;
@@ -93,25 +101,88 @@ function normalizeBoolean(value, fallback) {
   return fallback;
 }
 
+function sanitizeTargetId(value, fallback) {
+  const raw = normalizeText(value, fallback).toLowerCase();
+  const safe = raw.replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return safe || fallback;
+}
+
+function ensureUniqueTargetIds(targets) {
+  const seen = new Set();
+  return targets.map((target, index) => {
+    const base = sanitizeTargetId(target.id, `target-${index + 1}`);
+    let id = base;
+    let n = 2;
+    while (seen.has(id)) {
+      id = `${base}-${n}`;
+      n += 1;
+    }
+    seen.add(id);
+    return { ...target, id };
+  });
+}
+
+function normalizeTarget(target, fallback, index) {
+  const targetFallback = fallback || {
+    id: `target-${index + 1}`,
+    name: `Target ${index + 1}`,
+    endpoint: "/",
+    shortcut: "ctrl+shift+o"
+  };
+  return {
+    id: sanitizeTargetId(target?.id, targetFallback.id),
+    name: normalizeText(target?.name, targetFallback.name),
+    endpoint: normalizeEndpoint(target?.endpoint, targetFallback.endpoint),
+    shortcut: normalizeText(target?.shortcut, targetFallback.shortcut).toLowerCase()
+  };
+}
+
+function migrateTargetsFromLegacySettings(rawSettings) {
+  const legacy = [
+    {
+      id: "atlas",
+      name: "ChatGPT Atlas",
+      endpoint: rawSettings?.endpoints?.atlas,
+      shortcut: rawSettings?.shortcuts?.atlas
+    },
+    {
+      id: "dia",
+      name: "ChatGPT Dia",
+      endpoint: rawSettings?.endpoints?.dia,
+      shortcut: rawSettings?.shortcuts?.dia
+    },
+    {
+      id: "gemini",
+      name: "Gemini (Chrome)",
+      endpoint: rawSettings?.endpoints?.gemini,
+      shortcut: rawSettings?.shortcuts?.gemini
+    }
+  ];
+
+  return legacy.map((target, index) => normalizeTarget(target, DEFAULT_TARGETS[index], index));
+}
+
+function normalizeTargets(rawSettings) {
+  let normalized = [];
+  if (Array.isArray(rawSettings?.targets) && rawSettings.targets.length > 0) {
+    normalized = rawSettings.targets.map((target, index) =>
+      normalizeTarget(target, DEFAULT_TARGETS[index % DEFAULT_TARGETS.length], index)
+    );
+  } else {
+    normalized = migrateTargetsFromLegacySettings(rawSettings || {});
+  }
+  return ensureUniqueTargetIds(normalized);
+}
+
 function normalizeSettings(rawSettings) {
-  const merged = {
+  return {
     apiBase: normalizeApiBase(rawSettings?.apiBase),
-    endpoints: {
-      atlas: normalizeEndpoint(rawSettings?.endpoints?.atlas, DEFAULT_SETTINGS.endpoints.atlas),
-      dia: normalizeEndpoint(rawSettings?.endpoints?.dia, DEFAULT_SETTINGS.endpoints.dia),
-      gemini: normalizeEndpoint(rawSettings?.endpoints?.gemini, DEFAULT_SETTINGS.endpoints.gemini)
-    },
-    shortcuts: {
-      atlas: normalizeText(rawSettings?.shortcuts?.atlas, DEFAULT_SETTINGS.shortcuts.atlas).toLowerCase(),
-      dia: normalizeText(rawSettings?.shortcuts?.dia, DEFAULT_SETTINGS.shortcuts.dia).toLowerCase(),
-      gemini: normalizeText(rawSettings?.shortcuts?.gemini, DEFAULT_SETTINGS.shortcuts.gemini).toLowerCase()
-    },
+    targets: normalizeTargets(rawSettings),
     clearClipboardAfterUse: normalizeBoolean(
       rawSettings?.clearClipboardAfterUse,
       DEFAULT_SETTINGS.clearClipboardAfterUse
     )
   };
-  return merged;
 }
 
 async function getSettings() {
@@ -126,6 +197,10 @@ async function ensureSettings() {
     await chrome.storage.sync.set({ settings: normalized });
   }
   return normalized;
+}
+
+function findTargetById(settings, id) {
+  return settings.targets.find((target) => target.id === id) || null;
 }
 
 function getActiveTabUrl() {
@@ -146,17 +221,17 @@ function getActiveTabUrl() {
   });
 }
 
-async function callLocalApi(targetKey, rawUrl, settingsOverride = null) {
+async function callLocalApi(targetId, rawUrl, settingsOverride = null) {
   const settings = settingsOverride || await getSettings();
-  const endpoint = settings.endpoints[targetKey];
-  if (!endpoint) {
-    throw new Error(`Unknown target: ${targetKey}`);
+  const target = findTargetById(settings, targetId);
+  if (!target) {
+    throw new Error(`Unknown target: ${targetId}`);
   }
 
   const url = stripHash(rawUrl);
-  const endpointUrl = /^https?:\/\//i.test(endpoint)
-    ? endpoint
-    : `${settings.apiBase}${endpoint}`;
+  const endpointUrl = /^https?:\/\//i.test(target.endpoint)
+    ? target.endpoint
+    : `${settings.apiBase}${target.endpoint}`;
 
   const response = await fetch(endpointUrl, {
     method: "POST",
@@ -171,12 +246,13 @@ async function callLocalApi(targetKey, rawUrl, settingsOverride = null) {
   }
 }
 
-function recreateContextMenus() {
+async function recreateContextMenus() {
+  const settings = await getSettings();
   chrome.contextMenus.removeAll(() => {
-    for (const [key, config] of Object.entries(TARGETS)) {
+    for (const target of settings.targets) {
       chrome.contextMenus.create({
-        id: `open-with-${key}`,
-        title: config.menuTitle,
+        id: `${MENU_ID_PREFIX}${target.id}`,
+        title: `Open link/current page in ${target.name}`,
         contexts: ["page", "link", "selection"]
       });
     }
@@ -185,7 +261,7 @@ function recreateContextMenus() {
 
 chrome.runtime.onInstalled.addListener(async () => {
   await ensureSettings();
-  recreateContextMenus();
+  await recreateContextMenus();
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -193,11 +269,11 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (!info.menuItemId.startsWith("open-with-")) {
+  if (!info.menuItemId.startsWith(MENU_ID_PREFIX)) {
     return;
   }
 
-  const target = info.menuItemId.replace("open-with-", "");
+  const targetId = info.menuItemId.slice(MENU_ID_PREFIX.length);
   const linkUrl = toHttpUrl(info.linkUrl);
   const selectionUrl = extractFirstUrl(info.selectionText);
   const pageUrl = toHttpUrl(info.pageUrl) || toHttpUrl(tab?.url);
@@ -207,7 +283,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   try {
-    await callLocalApi(target, chosenUrl);
+    await callLocalApi(targetId, chosenUrl);
     flashBadge("OK", "#2ea043");
   } catch (error) {
     flashBadge("ERR", "#d1242f");
@@ -224,10 +300,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "SAVE_SETTINGS") {
-    const normalized = normalizeSettings(message.settings || {});
-    chrome.storage.sync.set({ settings: normalized })
-      .then(() => sendResponse({ ok: true, settings: normalized }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    (async () => {
+      try {
+        const normalized = normalizeSettings(message.settings || {});
+        await chrome.storage.sync.set({ settings: normalized });
+        await recreateContextMenus();
+        sendResponse({ ok: true, settings: normalized });
+      } catch (error) {
+        sendResponse({ ok: false, error: error.message });
+      }
+    })();
     return true;
   }
 

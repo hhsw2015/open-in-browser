@@ -11,8 +11,6 @@
         --border: #d0d7de;
         --text: #24292f;
         --sub: #57606a;
-        --ok: #1f883d;
-        --err: #cf222e;
       }
 
       * {
@@ -27,7 +25,7 @@
       }
 
       main {
-        max-width: 760px;
+        max-width: 860px;
         margin: 24px auto;
         padding: 0 16px;
       }
@@ -56,6 +54,12 @@
         font-size: 14px;
       }
 
+      .hint {
+        margin: 0 0 10px;
+        color: var(--sub);
+        font-size: 12px;
+      }
+
       .field {
         display: grid;
         gap: 6px;
@@ -71,7 +75,8 @@
         color: var(--sub);
       }
 
-      input {
+      input[type="text"],
+      input[type="url"] {
         width: 100%;
         padding: 8px 10px;
         border: 1px solid var(--border);
@@ -82,8 +87,30 @@
       input[type="checkbox"] {
         width: 16px;
         height: 16px;
-        padding: 0;
-        border-radius: 4px;
+      }
+
+      #targets {
+        display: grid;
+        gap: 10px;
+      }
+
+      .target-row {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        background: #fbfcfd;
+      }
+
+      .target-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr auto;
+        gap: 8px;
+        align-items: end;
+      }
+
+      .target-grid .cell {
+        display: grid;
+        gap: 6px;
       }
 
       .actions {
@@ -117,46 +144,23 @@
   <body>
     <main>
       <h1>Extension Settings</h1>
-      <p class="desc">Configure API address, endpoint paths, keyboard shortcuts, and clipboard behavior. Shortcut format: <code>ctrl+shift+o</code>, <code>alt+shift+o</code>, <code>meta+shift+o</code>.</p>
+      <p class="desc">Configure API base URL, custom targets, shortcuts, and clipboard behavior.</p>
 
       <form id="settings-form">
         <section class="panel">
           <h2>API</h2>
           <div class="field">
             <label for="apiBase">Base URL</label>
-            <input id="apiBase" name="apiBase" placeholder="http://localhost:5000">
+            <input id="apiBase" name="apiBase" type="url" placeholder="http://localhost:5000">
           </div>
         </section>
 
         <section class="panel">
-          <h2>Endpoints</h2>
-          <div class="field">
-            <label for="endpointAtlas">Atlas</label>
-            <input id="endpointAtlas" name="endpointAtlas" placeholder="/talkWithChatgptAltas">
-          </div>
-          <div class="field">
-            <label for="endpointDia">Dia</label>
-            <input id="endpointDia" name="endpointDia" placeholder="/talkWithChatgptDia">
-          </div>
-          <div class="field">
-            <label for="endpointGemini">Gemini</label>
-            <input id="endpointGemini" name="endpointGemini" placeholder="/talkWithGemini">
-          </div>
-        </section>
-
-        <section class="panel">
-          <h2>Shortcuts</h2>
-          <div class="field">
-            <label for="shortcutAtlas">Atlas Shortcut</label>
-            <input id="shortcutAtlas" name="shortcutAtlas" placeholder="ctrl+shift+o">
-          </div>
-          <div class="field">
-            <label for="shortcutDia">Dia Shortcut</label>
-            <input id="shortcutDia" name="shortcutDia" placeholder="alt+shift+o">
-          </div>
-          <div class="field">
-            <label for="shortcutGemini">Gemini Shortcut</label>
-            <input id="shortcutGemini" name="shortcutGemini" placeholder="meta+shift+o">
+          <h2>Targets</h2>
+          <p class="hint">Shortcut format: <code>ctrl+shift+o</code>, <code>alt+shift+o</code>, <code>meta+shift+o</code>. You can add any number of targets.</p>
+          <div id="targets"></div>
+          <div class="actions">
+            <button id="add-target" type="button">Add Target</button>
           </div>
         </section>
 
@@ -175,6 +179,28 @@
       </form>
       <div id="status"></div>
     </main>
+
+    <template id="target-row-template">
+      <div class="target-row">
+        <input class="target-id" type="hidden">
+        <div class="target-grid">
+          <div class="cell">
+            <label>Name</label>
+            <input class="target-name" type="text" placeholder="ChatGPT Atlas">
+          </div>
+          <div class="cell">
+            <label>Endpoint</label>
+            <input class="target-endpoint" type="text" placeholder="/talkWithChatgptAltas">
+          </div>
+          <div class="cell">
+            <label>Shortcut</label>
+            <input class="target-shortcut" type="text" placeholder="ctrl+shift+o">
+          </div>
+          <button class="remove-target" type="button">Remove</button>
+        </div>
+      </div>
+    </template>
+
     <script src="options.js"></script>
   </body>
 </html>
