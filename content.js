@@ -10,6 +10,7 @@
 
   let activeShortcuts = {};
   let activeClearClipboardAfterUse = DEFAULT_CLEAR_CLIPBOARD_AFTER_USE;
+  let hoveredLinkUrl = "";
   let toastTimer = null;
 
   function getToastEl() {
@@ -127,6 +128,18 @@
     );
   }
 
+  function matchModifiers(event, shortcut) {
+    if (!shortcut) {
+      return false;
+    }
+    return (
+      event.ctrlKey === shortcut.ctrl &&
+      event.altKey === shortcut.alt &&
+      event.metaKey === shortcut.meta &&
+      event.shiftKey === shortcut.shift
+    );
+  }
+
   function buildShortcuts(settings) {
     const shortcuts = settings?.shortcuts || {};
     const result = {};
@@ -149,6 +162,18 @@
       return new URL(match[0]).toString();
     } catch (_error) {
       return null;
+    }
+  }
+
+  function getSelectedTextSafe() {
+    try {
+      const selection = window.getSelection();
+      if (!selection) {
+        return "";
+      }
+      return selection.toString();
+    } catch (_error) {
+      return "";
     }
   }
 
@@ -177,6 +202,25 @@
   function findTargetByEvent(event) {
     for (const target of TARGET_KEYS) {
       if (matchShortcut(event, activeShortcuts[target])) {
+        return target;
+      }
+    }
+    return null;
+  }
+
+  function findTargetByModifierClick(event) {
+    for (const target of TARGET_KEYS) {
+      const shortcut = activeShortcuts[target];
+      if (!shortcut) {
+        continue;
+      }
+
+      const hasAnyModifier = shortcut.ctrl || shortcut.alt || shortcut.meta || shortcut.shift;
+      if (!hasAnyModifier) {
+        continue;
+      }
+
+      if (matchModifiers(event, shortcut)) {
         return target;
       }
     }
@@ -225,9 +269,17 @@
       event.preventDefault();
       event.stopPropagation();
 
+      const selectedText = getSelectedTextSafe();
+      const selectedTextUrl = extractFirstUrl(selectedText);
       const clipboardText = await readClipboardTextSafe();
       const clipboardUrl = extractFirstUrl(clipboardText);
-      const shouldTryClearFirst = Boolean(clipboardUrl) && activeClearClipboardAfterUse;
+      const hoveredUrl = extractFirstUrl(hoveredLinkUrl);
+      const shouldTryClearFirst = (
+        Boolean(clipboardUrl) &&
+        activeClearClipboardAfterUse &&
+        !hoveredUrl &&
+        !selectedTextUrl
+      );
       let clearedBeforeSend = false;
       if (shouldTryClearFirst) {
         clearedBeforeSend = await clearClipboardSafe();
@@ -238,6 +290,8 @@
         {
           type: "OPEN_CURRENT_PAGE",
           target,
+          hoveredLinkUrl,
+          selectedText,
           url: window.location.href,
           clipboardText,
           clipboardClearedByClient: clearedBeforeSend
@@ -268,6 +322,102 @@
           showToast("Opened");
         }
       );
+    },
+    true
+  );
+
+  document.addEventListener(
+    "click",
+    async (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+      if (!(event.target instanceof Element)) {
+        return;
+      }
+
+      const anchor = event.target.closest("a[href]");
+      if (!anchor) {
+        return;
+      }
+
+      const target = findTargetByModifierClick(event);
+      if (!target) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const selectedText = getSelectedTextSafe();
+      const selectedTextUrl = extractFirstUrl(selectedText);
+      const clipboardText = await readClipboardTextSafe();
+      const clipboardUrl = extractFirstUrl(clipboardText);
+      const clickedHttpUrl = extractFirstUrl(anchor.href);
+      const hoveredUrl = extractFirstUrl(hoveredLinkUrl);
+      const shouldTryClearFirst = (
+        Boolean(clipboardUrl) &&
+        activeClearClipboardAfterUse &&
+        !clickedHttpUrl &&
+        !hoveredUrl &&
+        !selectedTextUrl
+      );
+      let clearedBeforeSend = false;
+      if (shouldTryClearFirst) {
+        clearedBeforeSend = await clearClipboardSafe();
+      }
+
+      showToast(`Opening link in ${target}...`);
+      chrome.runtime.sendMessage(
+        {
+          type: "OPEN_CURRENT_PAGE",
+          target,
+          clickedLinkUrl: anchor.href,
+          hoveredLinkUrl,
+          selectedText,
+          url: window.location.href,
+          clipboardText,
+          clipboardClearedByClient: clearedBeforeSend
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            showToast("Extension error", true);
+            return;
+          }
+          if (!response?.ok) {
+            showToast(response?.error || "Request failed", true);
+            return;
+          }
+          if (response?.shouldClearClipboard) {
+            if (clearedBeforeSend) {
+              showToast("Opened, clipboard cleared");
+              return;
+            }
+            clearClipboardSafe().then((cleared) => {
+              if (cleared) {
+                showToast("Opened, clipboard cleared");
+                return;
+              }
+              showToast("Opened (clipboard not cleared)");
+            });
+            return;
+          }
+          showToast("Opened");
+        }
+      );
+    },
+    true
+  );
+
+  document.addEventListener(
+    "mouseover",
+    (event) => {
+      if (!(event.target instanceof Element)) {
+        hoveredLinkUrl = "";
+        return;
+      }
+      const anchor = event.target.closest("a[href]");
+      hoveredLinkUrl = anchor ? anchor.href : "";
     },
     true
   );

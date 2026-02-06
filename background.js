@@ -14,9 +14,9 @@ const DEFAULT_SETTINGS = {
 };
 
 const TARGETS = {
-  atlas: { menuTitle: "Open current page in ChatGPT Atlas" },
-  dia: { menuTitle: "Open current page in ChatGPT Dia" },
-  gemini: { menuTitle: "Open current page in Gemini (Chrome)" }
+  atlas: { menuTitle: "Open link/current page in ChatGPT Atlas" },
+  dia: { menuTitle: "Open link/current page in ChatGPT Dia" },
+  gemini: { menuTitle: "Open link/current page in Gemini (Chrome)" }
 };
 
 let badgeClearTimer = null;
@@ -49,6 +49,21 @@ function extractFirstUrl(text) {
 
   try {
     return new URL(match[0]).toString();
+  } catch (_error) {
+    return null;
+  }
+}
+
+function toHttpUrl(url) {
+  if (typeof url !== "string" || !url.trim()) {
+    return null;
+  }
+  try {
+    const parsed = new URL(url.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.toString();
   } catch (_error) {
     return null;
   }
@@ -162,7 +177,7 @@ function recreateContextMenus() {
       chrome.contextMenus.create({
         id: `open-with-${key}`,
         title: config.menuTitle,
-        contexts: ["page"]
+        contexts: ["page", "link", "selection"]
       });
     }
   });
@@ -183,13 +198,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 
   const target = info.menuItemId.replace("open-with-", "");
-  const pageUrl = info.pageUrl || tab?.url;
-  if (!pageUrl) {
+  const linkUrl = toHttpUrl(info.linkUrl);
+  const selectionUrl = extractFirstUrl(info.selectionText);
+  const pageUrl = toHttpUrl(info.pageUrl) || toHttpUrl(tab?.url);
+  const chosenUrl = linkUrl || selectionUrl || pageUrl;
+  if (!chosenUrl) {
     return;
   }
 
   try {
-    await callLocalApi(target, pageUrl);
+    await callLocalApi(target, chosenUrl);
     flashBadge("OK", "#2ea043");
   } catch (error) {
     flashBadge("ERR", "#d1242f");
@@ -220,15 +238,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     try {
       const settings = await getSettings();
+      const clickedLinkUrl = toHttpUrl(message.clickedLinkUrl);
+      const hoveredLinkUrl = toHttpUrl(message.hoveredLinkUrl);
+      const selectedTextUrl = extractFirstUrl(message.selectedText);
       const clipboardUrl = extractFirstUrl(message.clipboardText);
-      const preferredUrl = clipboardUrl || message.url || sender?.tab?.url;
+      const pageUrl = toHttpUrl(message.url) || toHttpUrl(sender?.tab?.url);
+
+      let source = "none";
+      let preferredUrl = null;
+      if (clickedLinkUrl) {
+        source = "clicked-link";
+        preferredUrl = clickedLinkUrl;
+      } else if (hoveredLinkUrl) {
+        source = "hovered-link";
+        preferredUrl = hoveredLinkUrl;
+      } else if (selectedTextUrl) {
+        source = "selected-text";
+        preferredUrl = selectedTextUrl;
+      } else if (clipboardUrl) {
+        source = "clipboard";
+        preferredUrl = clipboardUrl;
+      } else if (pageUrl) {
+        source = "page";
+        preferredUrl = pageUrl;
+      }
+
       const urlToOpen = preferredUrl || await getActiveTabUrl();
       await callLocalApi(message.target, urlToOpen, settings);
       flashBadge("OK", "#2ea043");
       sendResponse({
         ok: true,
-        usedClipboardUrl: Boolean(clipboardUrl),
-        shouldClearClipboard: Boolean(clipboardUrl) && settings.clearClipboardAfterUse
+        source,
+        usedClipboardUrl: source === "clipboard",
+        shouldClearClipboard: (
+          source === "clipboard" &&
+          settings.clearClipboardAfterUse &&
+          !message.clipboardClearedByClient
+        )
       });
     } catch (error) {
       flashBadge("ERR", "#d1242f");
