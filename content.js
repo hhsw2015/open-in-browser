@@ -197,6 +197,15 @@
     return null;
   }
 
+  function getCurrentHoveredLinkUrl() {
+    try {
+      const hoveredAnchor = document.querySelector("a[href]:hover");
+      return hoveredAnchor ? (extractUrlFromAnchor(hoveredAnchor) || "") : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
   function normalizeTargetId(value, fallback) {
     if (typeof value !== "string" || !value.trim()) {
       return fallback;
@@ -412,7 +421,9 @@
     const selectedTextUrl = extractFirstUrl(selectedText);
     const clipboardText = await readClipboardTextSafe();
     const clipboardUrl = extractFirstUrl(clipboardText);
-    const hoveredUrl = hoveredLinkUrl || null;
+    const currentHoveredLinkUrl = getCurrentHoveredLinkUrl();
+    hoveredLinkUrl = currentHoveredLinkUrl;
+    const hoveredUrl = currentHoveredLinkUrl || null;
     const shouldTryClearFirst = (
       Boolean(clipboardUrl) &&
       activeClearClipboardAfterUse &&
@@ -429,7 +440,7 @@
       {
         type: "OPEN_CURRENT_PAGE",
         target: target.id,
-        hoveredLinkUrl,
+        hoveredLinkUrl: currentHoveredLinkUrl,
         selectedText,
         url: window.location.href,
         clipboardText,

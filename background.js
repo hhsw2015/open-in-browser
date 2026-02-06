@@ -364,12 +364,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const selectedTextUrls = extractUrlsFromText(message.selectedText);
       const clipboardUrls = extractUrlsFromText(message.clipboardText);
       const pageUrl = toHttpUrl(message.url) || toHttpUrl(sender?.tab?.url);
+      const hasClipboardBatch = clipboardUrls.length > 1;
 
       let source = "none";
       let preferredUrls = [];
       if (clickedLinkUrl) {
         source = "clicked-link";
         preferredUrls = [clickedLinkUrl];
+      } else if (hasClipboardBatch) {
+        source = "clipboard";
+        preferredUrls = clipboardUrls;
       } else if (hoveredLinkUrl) {
         source = "hovered-link";
         preferredUrls = [hoveredLinkUrl];
