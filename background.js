@@ -45,21 +45,30 @@ function stripHash(url) {
   return hashIndex === -1 ? url : url.slice(0, hashIndex);
 }
 
-function extractFirstUrl(text) {
+function extractUrlsFromText(text) {
   if (typeof text !== "string" || !text.trim()) {
-    return null;
+    return [];
   }
 
-  const match = text.match(/https?:\/\/[^\s<>"'`]+/i);
-  if (!match) {
-    return null;
+  const matches = text.match(/https?:\/\/[^\s<>"'`]+/ig);
+  if (!matches) {
+    return [];
   }
 
-  try {
-    return new URL(match[0]).toString();
-  } catch (_error) {
-    return null;
+  const urls = [];
+  const seen = new Set();
+  for (const match of matches) {
+    try {
+      const parsed = new URL(match).toString();
+      if (!seen.has(parsed)) {
+        seen.add(parsed);
+        urls.push(parsed);
+      }
+    } catch (_error) {
+      continue;
+    }
   }
+  return urls;
 }
 
 function toHttpUrl(url) {
@@ -75,6 +84,26 @@ function toHttpUrl(url) {
   } catch (_error) {
     return null;
   }
+}
+
+function normalizeUrlPayload(rawUrls) {
+  const values = Array.isArray(rawUrls) ? rawUrls : [rawUrls];
+  const normalized = [];
+  const seen = new Set();
+
+  for (const value of values) {
+    if (typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    const stripped = stripHash(value.trim());
+    if (!stripped || seen.has(stripped)) {
+      continue;
+    }
+    seen.add(stripped);
+    normalized.push(stripped);
+  }
+
+  return normalized;
 }
 
 function normalizeText(value, fallback) {
@@ -221,14 +250,17 @@ function getActiveTabUrl() {
   });
 }
 
-async function callLocalApi(targetId, rawUrl, settingsOverride = null) {
+async function callLocalApi(targetId, rawUrls, settingsOverride = null) {
   const settings = settingsOverride || await getSettings();
   const target = findTargetById(settings, targetId);
   if (!target) {
     throw new Error(`Unknown target: ${targetId}`);
   }
 
-  const url = stripHash(rawUrl);
+  const urls = normalizeUrlPayload(rawUrls);
+  if (urls.length === 0) {
+    throw new Error("No valid URL found.");
+  }
   const endpointUrl = /^https?:\/\//i.test(target.endpoint)
     ? target.endpoint
     : `${settings.apiBase}${target.endpoint}`;
@@ -238,7 +270,7 @@ async function callLocalApi(targetId, rawUrl, settingsOverride = null) {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
     },
-    body: new URLSearchParams({ url }).toString()
+    body: new URLSearchParams({ url: urls.join("*") }).toString()
   });
 
   if (!response.ok) {
@@ -275,15 +307,22 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
   const targetId = info.menuItemId.slice(MENU_ID_PREFIX.length);
   const linkUrl = toHttpUrl(info.linkUrl);
-  const selectionUrl = extractFirstUrl(info.selectionText);
+  const selectionUrls = extractUrlsFromText(info.selectionText);
   const pageUrl = toHttpUrl(info.pageUrl) || toHttpUrl(tab?.url);
-  const chosenUrl = linkUrl || selectionUrl || pageUrl;
-  if (!chosenUrl) {
+  let chosenUrls = [];
+  if (linkUrl) {
+    chosenUrls = [linkUrl];
+  } else if (selectionUrls.length > 0) {
+    chosenUrls = selectionUrls;
+  } else if (pageUrl) {
+    chosenUrls = [pageUrl];
+  }
+  if (chosenUrls.length === 0) {
     return;
   }
 
   try {
-    await callLocalApi(targetId, chosenUrl);
+    await callLocalApi(targetId, chosenUrls);
     flashBadge("OK", "#2ea043");
   } catch (error) {
     flashBadge("ERR", "#d1242f");
@@ -322,35 +361,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const settings = await getSettings();
       const clickedLinkUrl = toHttpUrl(message.clickedLinkUrl);
       const hoveredLinkUrl = toHttpUrl(message.hoveredLinkUrl);
-      const selectedTextUrl = extractFirstUrl(message.selectedText);
-      const clipboardUrl = extractFirstUrl(message.clipboardText);
+      const selectedTextUrls = extractUrlsFromText(message.selectedText);
+      const clipboardUrls = extractUrlsFromText(message.clipboardText);
       const pageUrl = toHttpUrl(message.url) || toHttpUrl(sender?.tab?.url);
 
       let source = "none";
-      let preferredUrl = null;
+      let preferredUrls = [];
       if (clickedLinkUrl) {
         source = "clicked-link";
-        preferredUrl = clickedLinkUrl;
+        preferredUrls = [clickedLinkUrl];
       } else if (hoveredLinkUrl) {
         source = "hovered-link";
-        preferredUrl = hoveredLinkUrl;
-      } else if (selectedTextUrl) {
+        preferredUrls = [hoveredLinkUrl];
+      } else if (selectedTextUrls.length > 0) {
         source = "selected-text";
-        preferredUrl = selectedTextUrl;
-      } else if (clipboardUrl) {
+        preferredUrls = selectedTextUrls;
+      } else if (clipboardUrls.length > 0) {
         source = "clipboard";
-        preferredUrl = clipboardUrl;
+        preferredUrls = clipboardUrls;
       } else if (pageUrl) {
         source = "page";
-        preferredUrl = pageUrl;
+        preferredUrls = [pageUrl];
       }
 
-      const urlToOpen = preferredUrl || await getActiveTabUrl();
-      await callLocalApi(message.target, urlToOpen, settings);
+      let urlsToOpen = preferredUrls;
+      if (urlsToOpen.length === 0) {
+        const fallbackUrl = await getActiveTabUrl();
+        urlsToOpen = [fallbackUrl];
+      }
+      const normalizedUrls = normalizeUrlPayload(urlsToOpen);
+      await callLocalApi(message.target, normalizedUrls, settings);
       flashBadge("OK", "#2ea043");
       sendResponse({
         ok: true,
         source,
+        urlCount: normalizedUrls.length,
         usedClipboardUrl: source === "clipboard",
         shouldClearClipboard: (
           source === "clipboard" &&

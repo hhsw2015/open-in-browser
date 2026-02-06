@@ -11,6 +11,18 @@
   let activeClearClipboardAfterUse = DEFAULT_CLEAR_CLIPBOARD_AFTER_USE;
   let hoveredLinkUrl = "";
   let toastTimer = null;
+  let lastKeyboardTriggerSignature = "";
+  let lastKeyboardTriggerAt = 0;
+  const KEYBOARD_TRIGGER_DEDUP_MS = 800;
+  const MAIN_WORLD_CHANNEL_KEY = "__openInBrowserMainWorld";
+  const MAIN_WORLD_READY_TYPE = "MAIN_WORLD_READY";
+  const MAIN_WORLD_UPDATE_TYPE = "UPDATE_SHORTCUTS";
+  const MAIN_WORLD_TRIGGER_TYPE = "TRIGGER_SHORTCUT";
+  const MAIN_WORLD_SYNC_INTERVAL_MS = 500;
+  const MAIN_WORLD_SYNC_MAX_ATTEMPTS = 10;
+  let mainWorldHotkeyReady = false;
+  let mainWorldSyncAttempts = 0;
+  let mainWorldSyncTimer = null;
 
   function getToastEl() {
     let el = document.getElementById(TOAST_ID);
@@ -129,6 +141,62 @@
     }
   }
 
+  function toHttpUrl(urlText) {
+    if (typeof urlText !== "string" || !urlText.trim()) {
+      return null;
+    }
+    try {
+      const parsed = new URL(urlText, window.location.href);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return null;
+      }
+      return parsed.toString();
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function extractUrlFromAnchor(anchor) {
+    if (!(anchor instanceof HTMLAnchorElement)) {
+      return null;
+    }
+
+    const directHref = toHttpUrl(anchor.href);
+    if (directHref) {
+      return directHref;
+    }
+
+    const hrefAttr = anchor.getAttribute("href");
+    const hrefFromAttr = toHttpUrl(hrefAttr);
+    if (hrefFromAttr) {
+      return hrefFromAttr;
+    }
+
+    const attributeCandidates = [
+      anchor.getAttribute("data-url"),
+      anchor.getAttribute("data-href"),
+      anchor.getAttribute("data-link"),
+      anchor.getAttribute("onclick"),
+      anchor.getAttribute("onmouseover")
+    ];
+
+    for (const candidate of attributeCandidates) {
+      const found = extractFirstUrl(candidate);
+      if (found) {
+        return found;
+      }
+    }
+
+    for (const value of Object.values(anchor.dataset || {})) {
+      const found = extractFirstUrl(value);
+      if (found) {
+        return found;
+      }
+    }
+
+    return null;
+  }
+
   function normalizeTargetId(value, fallback) {
     if (typeof value !== "string" || !value.trim()) {
       return fallback;
@@ -181,10 +249,12 @@
       const runtimeSettings = buildRuntimeSettings(settings || {});
       activeTargetBindings = runtimeSettings.targetBindings;
       activeClearClipboardAfterUse = runtimeSettings.clearClipboardAfterUse;
+      publishShortcutBindingsToMainWorld();
     } catch (_error) {
       const runtimeSettings = buildRuntimeSettings({});
       activeTargetBindings = runtimeSettings.targetBindings;
       activeClearClipboardAfterUse = runtimeSettings.clearClipboardAfterUse;
+      publishShortcutBindingsToMainWorld();
     }
   }
 
@@ -230,6 +300,59 @@
     return null;
   }
 
+  function hasAnyModifier(shortcut) {
+    return Boolean(shortcut.ctrl || shortcut.alt || shortcut.meta || shortcut.shift);
+  }
+
+  function getKeyboardTriggerSignature(target, event) {
+    return [
+      target.id,
+      event.code,
+      event.ctrlKey ? "1" : "0",
+      event.altKey ? "1" : "0",
+      event.metaKey ? "1" : "0",
+      event.shiftKey ? "1" : "0"
+    ].join("|");
+  }
+
+  function publishShortcutBindingsToMainWorld() {
+    const bindings = activeTargetBindings.map((binding) => ({
+      id: binding.id,
+      shortcut: {
+        ctrl: binding.shortcut.ctrl,
+        alt: binding.shortcut.alt,
+        meta: binding.shortcut.meta,
+        shift: binding.shortcut.shift,
+        code: binding.shortcut.code
+      }
+    }));
+
+    window.postMessage(
+      {
+        [MAIN_WORLD_CHANNEL_KEY]: true,
+        type: MAIN_WORLD_UPDATE_TYPE,
+        bindings
+      },
+      "*"
+    );
+  }
+
+  function ensureMainWorldBindingsSync() {
+    if (mainWorldSyncTimer) {
+      return;
+    }
+    mainWorldSyncAttempts = 0;
+    mainWorldSyncTimer = setInterval(() => {
+      if (mainWorldSyncAttempts >= MAIN_WORLD_SYNC_MAX_ATTEMPTS) {
+        clearInterval(mainWorldSyncTimer);
+        mainWorldSyncTimer = null;
+        return;
+      }
+      mainWorldSyncAttempts += 1;
+      publishShortcutBindingsToMainWorld();
+    }, MAIN_WORLD_SYNC_INTERVAL_MS);
+  }
+
   function getSelectedTextSafe() {
     try {
       const selection = window.getSelection();
@@ -263,23 +386,117 @@
       return;
     }
 
+    const urlCount = Number.isFinite(response?.urlCount) ? response.urlCount : 1;
+    const openedText = urlCount > 1 ? `Opened ${urlCount} URLs` : "Opened";
+
     if (response?.shouldClearClipboard) {
       if (clearedBeforeSend) {
-        showToast("Opened, clipboard cleared");
+        showToast(`${openedText}, clipboard cleared`);
         return;
       }
       clearClipboardSafe().then((cleared) => {
         if (cleared) {
-          showToast("Opened, clipboard cleared");
+          showToast(`${openedText}, clipboard cleared`);
           return;
         }
-        showToast("Opened (clipboard not cleared)");
+        showToast(`${openedText} (clipboard not cleared)`);
       });
       return;
     }
 
-    showToast("Opened");
+    showToast(openedText);
   }
+
+  async function sendOpenCurrentPageForTarget(target) {
+    const selectedText = getSelectedTextSafe();
+    const selectedTextUrl = extractFirstUrl(selectedText);
+    const clipboardText = await readClipboardTextSafe();
+    const clipboardUrl = extractFirstUrl(clipboardText);
+    const hoveredUrl = hoveredLinkUrl || null;
+    const shouldTryClearFirst = (
+      Boolean(clipboardUrl) &&
+      activeClearClipboardAfterUse &&
+      !hoveredUrl &&
+      !selectedTextUrl
+    );
+    let clearedBeforeSend = false;
+    if (shouldTryClearFirst) {
+      clearedBeforeSend = await clearClipboardSafe();
+    }
+
+    showToast(`Sending to ${target.name}...`);
+    chrome.runtime.sendMessage(
+      {
+        type: "OPEN_CURRENT_PAGE",
+        target: target.id,
+        hoveredLinkUrl,
+        selectedText,
+        url: window.location.href,
+        clipboardText,
+        clipboardClearedByClient: clearedBeforeSend
+      },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          showToast("Extension error", true);
+          return;
+        }
+        handleResponse(response, clearedBeforeSend);
+      }
+    );
+  }
+
+  async function sendOpenCurrentPageFromKeyboard(event, target) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    await sendOpenCurrentPageForTarget(target);
+  }
+
+  window.addEventListener(
+    "message",
+    (event) => {
+      if (event.source !== window) {
+        return;
+      }
+
+      const data = event.data;
+      if (!data || data[MAIN_WORLD_CHANNEL_KEY] !== true || typeof data.type !== "string") {
+        return;
+      }
+
+      if (data.type === MAIN_WORLD_READY_TYPE) {
+        mainWorldHotkeyReady = true;
+        publishShortcutBindingsToMainWorld();
+        ensureMainWorldBindingsSync();
+        return;
+      }
+
+      if (data.type !== MAIN_WORLD_TRIGGER_TYPE || typeof data.targetId !== "string") {
+        return;
+      }
+
+      const target = activeTargetBindings.find((binding) => binding.id === data.targetId);
+      if (!target) {
+        return;
+      }
+
+      const signature = typeof data.signature === "string"
+        ? data.signature
+        : `${target.id}|main`;
+      const now = Date.now();
+      const recentlyHandled = (
+        signature === lastKeyboardTriggerSignature &&
+        (now - lastKeyboardTriggerAt) < KEYBOARD_TRIGGER_DEDUP_MS
+      );
+      if (recentlyHandled) {
+        return;
+      }
+
+      lastKeyboardTriggerSignature = signature;
+      lastKeyboardTriggerAt = now;
+      void sendOpenCurrentPageForTarget(target);
+    },
+    true
+  );
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "sync" || !changes.settings) {
@@ -288,12 +505,16 @@
     const runtimeSettings = buildRuntimeSettings(changes.settings.newValue || {});
     activeTargetBindings = runtimeSettings.targetBindings;
     activeClearClipboardAfterUse = runtimeSettings.clearClipboardAfterUse;
+    publishShortcutBindingsToMainWorld();
   });
 
   window.addEventListener(
     "keydown",
     async (event) => {
-      if (isEditableTarget(event.target)) {
+      if (mainWorldHotkeyReady) {
+        return;
+      }
+      if (event.repeat) {
         return;
       }
 
@@ -301,45 +522,43 @@
       if (!target) {
         return;
       }
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      const selectedText = getSelectedTextSafe();
-      const selectedTextUrl = extractFirstUrl(selectedText);
-      const clipboardText = await readClipboardTextSafe();
-      const clipboardUrl = extractFirstUrl(clipboardText);
-      const hoveredUrl = extractFirstUrl(hoveredLinkUrl);
-      const shouldTryClearFirst = (
-        Boolean(clipboardUrl) &&
-        activeClearClipboardAfterUse &&
-        !hoveredUrl &&
-        !selectedTextUrl
-      );
-      let clearedBeforeSend = false;
-      if (shouldTryClearFirst) {
-        clearedBeforeSend = await clearClipboardSafe();
+      if (isEditableTarget(event.target) && !hasAnyModifier(target.shortcut)) {
+        return;
       }
 
-      showToast(`Sending to ${target.name}...`);
-      chrome.runtime.sendMessage(
-        {
-          type: "OPEN_CURRENT_PAGE",
-          target: target.id,
-          hoveredLinkUrl,
-          selectedText,
-          url: window.location.href,
-          clipboardText,
-          clipboardClearedByClient: clearedBeforeSend
-        },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            showToast("Extension error", true);
-            return;
-          }
-          handleResponse(response, clearedBeforeSend);
-        }
+      lastKeyboardTriggerSignature = getKeyboardTriggerSignature(target, event);
+      lastKeyboardTriggerAt = Date.now();
+      await sendOpenCurrentPageFromKeyboard(event, target);
+    },
+    true
+  );
+
+  window.addEventListener(
+    "keyup",
+    async (event) => {
+      if (mainWorldHotkeyReady) {
+        return;
+      }
+
+      const target = findTargetByKeyEvent(event);
+      if (!target) {
+        return;
+      }
+      if (isEditableTarget(event.target) && !hasAnyModifier(target.shortcut)) {
+        return;
+      }
+
+      const signature = getKeyboardTriggerSignature(target, event);
+      const now = Date.now();
+      const handledByRecentKeydown = (
+        signature === lastKeyboardTriggerSignature &&
+        (now - lastKeyboardTriggerAt) < KEYBOARD_TRIGGER_DEDUP_MS
       );
+      if (handledByRecentKeydown) {
+        return;
+      }
+
+      await sendOpenCurrentPageFromKeyboard(event, target);
     },
     true
   );
@@ -371,8 +590,8 @@
       const selectedTextUrl = extractFirstUrl(selectedText);
       const clipboardText = await readClipboardTextSafe();
       const clipboardUrl = extractFirstUrl(clipboardText);
-      const clickedHttpUrl = extractFirstUrl(anchor.href);
-      const hoveredUrl = extractFirstUrl(hoveredLinkUrl);
+      const clickedHttpUrl = extractUrlFromAnchor(anchor);
+      const hoveredUrl = hoveredLinkUrl || null;
       const shouldTryClearFirst = (
         Boolean(clipboardUrl) &&
         activeClearClipboardAfterUse &&
@@ -390,7 +609,7 @@
         {
           type: "OPEN_CURRENT_PAGE",
           target: target.id,
-          clickedLinkUrl: anchor.href,
+          clickedLinkUrl: clickedHttpUrl || anchor.href,
           hoveredLinkUrl,
           selectedText,
           url: window.location.href,
@@ -417,7 +636,7 @@
         return;
       }
       const anchor = event.target.closest("a[href]");
-      hoveredLinkUrl = anchor ? anchor.href : "";
+      hoveredLinkUrl = anchor ? (extractUrlFromAnchor(anchor) || "") : "";
     },
     true
   );
