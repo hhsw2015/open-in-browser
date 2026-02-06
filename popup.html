@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Open Current Page</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 12px;
+        width: 280px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      h1 {
+        margin: 0 0 10px;
+        font-size: 14px;
+      }
+
+      .buttons {
+        display: grid;
+        gap: 8px;
+      }
+
+      button {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #d0d7de;
+        border-radius: 8px;
+        background: #f6f8fa;
+        cursor: pointer;
+        font-size: 13px;
+        text-align: left;
+      }
+
+      button:hover {
+        background: #eef2f8;
+      }
+
+      #status {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #57606a;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Open Current Page With</h1>
+    <div class="buttons">
+      <button data-target="atlas">ChatGPT Atlas</button>
+      <button data-target="dia">ChatGPT Dia</button>
+      <button data-target="gemini">Gemini (Chrome)</button>
+    </div>
+    <button id="open-settings" style="margin-top:10px;">Settings</button>
+    <div id="status"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>

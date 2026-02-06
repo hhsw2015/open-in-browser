@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Open In Browser Apps - Settings</title>
+    <style>
+      :root {
+        --bg: #f6f8fa;
+        --panel: #ffffff;
+        --border: #d0d7de;
+        --text: #24292f;
+        --sub: #57606a;
+        --ok: #1f883d;
+        --err: #cf222e;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+        max-width: 760px;
+        margin: 24px auto;
+        padding: 0 16px;
+      }
+
+      h1 {
+        font-size: 20px;
+        margin: 0 0 12px;
+      }
+
+      p.desc {
+        margin: 0 0 16px;
+        color: var(--sub);
+        font-size: 13px;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 14px;
+        margin-bottom: 12px;
+      }
+
+      .panel h2 {
+        margin: 0 0 10px;
+        font-size: 14px;
+      }
+
+      .field {
+        display: grid;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+
+      .field:last-child {
+        margin-bottom: 0;
+      }
+
+      label {
+        font-size: 12px;
+        color: var(--sub);
+      }
+
+      input {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-size: 13px;
+      }
+
+      input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        padding: 0;
+        border-radius: 4px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      button {
+        padding: 8px 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #ffffff;
+        cursor: pointer;
+        font-size: 13px;
+      }
+
+      button.primary {
+        background: #0969da;
+        border-color: #0969da;
+        color: #ffffff;
+      }
+
+      #status {
+        margin-top: 10px;
+        font-size: 13px;
+        color: var(--sub);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Extension Settings</h1>
+      <p class="desc">Configure API address, endpoint paths, keyboard shortcuts, and clipboard behavior. Shortcut format: <code>ctrl+shift+o</code>, <code>alt+shift+o</code>, <code>meta+shift+o</code>.</p>
+
+      <form id="settings-form">
+        <section class="panel">
+          <h2>API</h2>
+          <div class="field">
+            <label for="apiBase">Base URL</label>
+            <input id="apiBase" name="apiBase" placeholder="http://localhost:5000">
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Endpoints</h2>
+          <div class="field">
+            <label for="endpointAtlas">Atlas</label>
+            <input id="endpointAtlas" name="endpointAtlas" placeholder="/talkWithChatgptAltas">
+          </div>
+          <div class="field">
+            <label for="endpointDia">Dia</label>
+            <input id="endpointDia" name="endpointDia" placeholder="/talkWithChatgptDia">
+          </div>
+          <div class="field">
+            <label for="endpointGemini">Gemini</label>
+            <input id="endpointGemini" name="endpointGemini" placeholder="/talkWithGemini">
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Shortcuts</h2>
+          <div class="field">
+            <label for="shortcutAtlas">Atlas Shortcut</label>
+            <input id="shortcutAtlas" name="shortcutAtlas" placeholder="ctrl+shift+o">
+          </div>
+          <div class="field">
+            <label for="shortcutDia">Dia Shortcut</label>
+            <input id="shortcutDia" name="shortcutDia" placeholder="alt+shift+o">
+          </div>
+          <div class="field">
+            <label for="shortcutGemini">Gemini Shortcut</label>
+            <input id="shortcutGemini" name="shortcutGemini" placeholder="meta+shift+o">
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Clipboard</h2>
+          <div class="field">
+            <label for="clearClipboardAfterUse">Clear clipboard after using clipboard URL</label>
+            <input id="clearClipboardAfterUse" name="clearClipboardAfterUse" type="checkbox" checked>
+          </div>
+        </section>
+
+        <div class="actions">
+          <button class="primary" type="submit">Save</button>
+          <button id="reset-defaults" type="button">Reset Defaults</button>
+        </div>
+      </form>
+      <div id="status"></div>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>
